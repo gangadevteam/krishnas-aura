@@ -1,0 +1,44 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    // Only this exact email may ever hold the seller role. Checked against
+    // the verified Firebase Auth token email -- not any client-writable
+    // field -- so it cannot be spoofed from the browser.
+    function isSellerAccount() {
+      return signedIn() && request.auth.token.email == 'krishnasaaura@gmail.com';
+    }
+
+    // Products: anyone can browse; only the seller account can write.
+    match /products/{productId} {
+      allow read: if true;
+      allow create, update, delete: if isSellerAccount();
+    }
+
+    // Users: each person manages only their own profile document, and can
+    // never write role: 'seller' onto it unless they ARE the seller email.
+    match /users/{uid} {
+      allow read: if signedIn() && request.auth.uid == uid;
+      allow create, update: if signedIn()
+        && request.auth.uid == uid
+        && (!('role' in request.resource.data) || request.resource.data.role != 'seller' || isSellerAccount());
+    }
+
+    // Carts: private to each user.
+    match /carts/{uid} {
+      allow read, write: if signedIn() && request.auth.uid == uid;
+    }
+
+    // Orders: buyers create their own; seller reads/updates all.
+    match /orders/{orderId} {
+      allow create: if signedIn() && request.resource.data.uid == request.auth.uid;
+      allow read: if signedIn()
+        && (resource.data.uid == request.auth.uid || isSellerAccount());
+      allow update: if isSellerAccount();
+    }
+  }
+}
