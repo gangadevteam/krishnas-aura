@@ -40,5 +40,12 @@ service cloud.firestore {
         && (resource.data.uid == request.auth.uid || isSellerAccount());
       allow update: if isSellerAccount();
     }
+
+    // Settings (e.g. storefront-wide discount + validity): anyone can read,
+    // only the seller account can write.
+    match /settings/{settingId} {
+      allow read: if true;
+      allow write: if isSellerAccount();
+    }
   }
 }

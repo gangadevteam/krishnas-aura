@@ -2,6 +2,7 @@ import React, { useState, useMemo, useEffect, useRef } from "react";
 import {
   Sparkles, ShoppingCart, User, Store, Mail, ArrowRight, X, Plus, Minus,
   LogOut, Package, Search, UploadCloud, CheckCircle2, UserPlus, Phone, Image as ImageIcon,
+  MapPin, Truck, Percent, ClipboardList,
 } from "lucide-react";
 import { firebaseReady } from "./lib/firebase";
 import {
@@ -11,11 +12,14 @@ import {
 } from "./lib/authService";
 import {
   watchProducts, addProduct, removeProduct, seedCatalog, loadCart, saveCart, uploadProductImage,
+  applyGlobalDiscount,
 } from "./lib/productService";
+import { placeOrder, watchOrders, COURIER_AREAS } from "./lib/orderService";
+import { watchDiscountSettings, setDiscountValidity } from "./lib/settingsService";
 import { CATEGORIES } from "./lib/catalog";
 import "./App.css";
 
-const BRAND = "Krishna's Aura";
+const BRAND = "Krishna's Aura Crackers";
 const fmt = (n) => "₹" + Number(n).toLocaleString("en-IN");
 
 // ---------------------------------------------------------------------------
@@ -93,6 +97,76 @@ function Glyph({ category, size = 64, imageUrl }) {
 }
 
 // ---------------------------------------------------------------------------
+// Fireworks background — a fixed full-viewport canvas of bursting fireworks
+// that sits behind every page (storefront + seller dashboard). Fades the
+// previous frame instead of clearing it, so the canvas itself becomes the
+// dark night-sky backdrop with trailing sparks.
+// ---------------------------------------------------------------------------
+
+function FireworksBackground() {
+  const canvasRef = useRef(null);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    const ctx = canvas.getContext("2d");
+    const colors = ["#E8A33D", "#FF6B35", "#FFB84D", "#5DCAA5", "#B8A9D9", "#FF6B6B"];
+    let particles = [];
+    let frame = 0;
+    let raf;
+
+    function resize() {
+      canvas.width = window.innerWidth;
+      canvas.height = window.innerHeight;
+    }
+    resize();
+    window.addEventListener("resize", resize);
+
+    function launch() {
+      const x = canvas.width * (0.15 + Math.random() * 0.7);
+      const y = canvas.height * (0.12 + Math.random() * 0.35);
+      const color = colors[Math.floor(Math.random() * colors.length)];
+      const count = 32 + Math.floor(Math.random() * 18);
+      for (let i = 0; i < count; i++) {
+        const angle = (Math.PI * 2 * i) / count;
+        const speed = 1 + Math.random() * 2.3;
+        particles.push({ x, y, vx: Math.cos(angle) * speed, vy: Math.sin(angle) * speed, life: 1, color });
+      }
+    }
+
+    function tick() {
+      frame++;
+      ctx.fillStyle = "rgba(21, 12, 43, 0.16)";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      if (frame % 85 === 0) launch();
+      particles.forEach((p) => {
+        p.x += p.vx;
+        p.y += p.vy;
+        p.vy += 0.02;
+        p.life -= 0.012;
+      });
+      particles = particles.filter((p) => p.life > 0);
+      particles.forEach((p) => {
+        ctx.globalAlpha = Math.max(p.life, 0);
+        ctx.fillStyle = p.color;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, 1.8, 0, Math.PI * 2);
+        ctx.fill();
+      });
+      ctx.globalAlpha = 1;
+      raf = requestAnimationFrame(tick);
+    }
+    raf = requestAnimationFrame(tick);
+
+    return () => {
+      cancelAnimationFrame(raf);
+      window.removeEventListener("resize", resize);
+    };
+  }, []);
+
+  return <canvas ref={canvasRef} className="fireworks-canvas" aria-hidden="true" />;
+}
+
+// ---------------------------------------------------------------------------
 // App
 // ---------------------------------------------------------------------------
 
@@ -106,6 +180,7 @@ export default function App() {
   const [search, setSearch] = useState("");
   const [finishing, setFinishing] = useState(false);
   const [needsPhone, setNeedsPhone] = useState(false);
+  const [checkoutOpen, setCheckoutOpen] = useState(false);
   const cartLoaded = useRef(false);
 
   // Live product feed
@@ -195,10 +270,18 @@ export default function App() {
     );
 
   if (session?.role === "seller")
-    return <SellerDashboard session={session} onLogout={signOutAnd(setSession)} products={products} />;
+    return (
+      <SellerDashboard
+        session={session}
+        onLogout={signOutAnd(setSession)}
+        products={products}
+        setProducts={setProducts}
+      />
+    );
 
   return (
     <div className="page">
+      <FireworksBackground />
       {!firebaseReady && (
         <div className="demo-banner">
           Demo mode — Firebase not configured yet. Sign-in is simulated and data resets on refresh. See README to go live.
@@ -289,8 +372,31 @@ export default function App() {
         ))}
       </main>
 
+      <section className="info-section" id="about">
+        <div className="info-grid">
+          <div className="info-card">
+            <h2 className="cat-heading"><MapPin size={16} /> About Us</h2>
+            <p>
+              {BRAND} ships straight from the fireworks capital of India —{" "}
+              <strong style={{ color: "#F4EEFA" }}>Sivakasi, Tamil Nadu, 626123</strong>.
+              Every product on this site is sourced and tested by our own team before it
+              reaches your celebration.
+            </p>
+          </div>
+          <div className="info-card" id="contact">
+            <h2 className="cat-heading"><Phone size={16} /> Contact Us</h2>
+            <p>
+              Call or WhatsApp us:{" "}
+              <a className="contact-link" href="tel:+917411348102">74113 48102</a>
+              {" · "}
+              <a className="contact-link" href="tel:+916380036470">63800 36470</a>
+            </p>
+          </div>
+        </div>
+      </section>
+
       <footer className="footer">
-        {BRAND} · Handle with care · Sale subject to local fireworks regulations and licensing
+        {BRAND} · Sivakasi, 626123 · Handle with care · Sale subject to local fireworks regulations and licensing
       </footer>
 
       {authOpen && (
@@ -322,6 +428,23 @@ export default function App() {
           onLoginPrompt={() => {
             setCartOpen(false);
             setAuthOpen(true);
+          }}
+          onCheckout={() => {
+            setCartOpen(false);
+            setCheckoutOpen(true);
+          }}
+        />
+      )}
+      {checkoutOpen && session && (
+        <CheckoutModal
+          session={session}
+          cart={cart}
+          products={products}
+          subtotal={cartTotal}
+          onClose={() => setCheckoutOpen(false)}
+          onPlaced={() => {
+            setCart({});
+            setCheckoutOpen(false);
           }}
         />
       )}
@@ -609,7 +732,7 @@ function PhonePrompt({ onClose, onSave }) {
 // Cart drawer
 // ---------------------------------------------------------------------------
 
-function CartDrawer({ cart, products, total, onClose, onChangeQty, isLoggedIn, onLoginPrompt }) {
+function CartDrawer({ cart, products, total, onClose, onChangeQty, isLoggedIn, onLoginPrompt, onCheckout }) {
   const items = Object.entries(cart)
     .map(([id, qty]) => ({ product: products.find((p) => String(p.id) === String(id)), qty }))
     .filter((x) => x.product);
@@ -654,14 +777,7 @@ function CartDrawer({ cart, products, total, onClose, onChangeQty, isLoggedIn, o
                 <span>Total</span>
                 <span className="total-amt">{fmt(total)}</span>
               </div>
-              <button
-                className="primary-btn"
-                onClick={
-                  isLoggedIn
-                    ? () => alert("Checkout flow is the next milestone — orders collection + payment.")
-                    : onLoginPrompt
-                }
-              >
+              <button className="primary-btn" onClick={isLoggedIn ? onCheckout : onLoginPrompt}>
                 {isLoggedIn ? "Proceed to checkout" : "Sign in to checkout"} <ArrowRight size={16} />
               </button>
             </div>
@@ -673,10 +789,166 @@ function CartDrawer({ cart, products, total, onClose, onChangeQty, isLoggedIn, o
 }
 
 // ---------------------------------------------------------------------------
+// Checkout — address details, then a "Submit order" step that simulates
+// payment and writes the order (visible to the seller dashboard).
+// ---------------------------------------------------------------------------
+
+function CheckoutModal({ session, cart, products, subtotal, onClose, onPlaced }) {
+  const [step, setStep] = useState("address"); // address | review | done
+  const [fullName, setFullName] = useState("");
+  const [phone, setPhone] = useState("");
+  const [addressLine, setAddressLine] = useState("");
+  const [city, setCity] = useState("");
+  const [pincode, setPincode] = useState("");
+  const [areaId, setAreaId] = useState(COURIER_AREAS[0].id);
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [placedOrder, setPlacedOrder] = useState(null);
+
+  const area = COURIER_AREAS.find((a) => a.id === areaId);
+  const total = subtotal + area.charge;
+
+  function submitAddress() {
+    setError("");
+    if (!fullName.trim()) return setError("Enter your full name.");
+    if (!/^\d{10}$/.test(phone.trim())) return setError("Enter a valid 10-digit phone number.");
+    if (!addressLine.trim() || !city.trim() || !pincode.trim())
+      return setError("Fill in your full address, city, and pincode.");
+    setStep("review");
+  }
+
+  async function submitOrder() {
+    setBusy(true);
+    setError("");
+    try {
+      // Simulated payment processing — no real gateway wired up yet.
+      await new Promise((resolve) => setTimeout(resolve, 900));
+      const items = Object.entries(cart).map(([id, qty]) => {
+        const p = products.find((x) => String(x.id) === String(id));
+        return { id, name: p?.name || "", qty, price: p?.finalPrice || 0 };
+      });
+      const order = await placeOrder({
+        uid: session.uid,
+        buyerEmail: session.email,
+        buyerName: fullName.trim(),
+        phone: phone.trim(),
+        address: { line: addressLine.trim(), city: city.trim(), pincode: pincode.trim(), area: area.label },
+        items,
+        subtotal,
+        courierCharge: area.charge,
+        total,
+      });
+      setPlacedOrder(order);
+      setStep("done");
+    } catch (e) {
+      setError(e.message || "Payment failed. Please try again.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="overlay" onClick={busy ? undefined : () => (step === "done" ? onPlaced(placedOrder) : onClose())}>
+      <div className="modal" onClick={(e) => e.stopPropagation()}>
+        {step !== "done" && (
+          <button className="modal-close" onClick={onClose} aria-label="Close" disabled={busy}>
+            <X size={18} />
+          </button>
+        )}
+
+        {step === "address" && (
+          <>
+            <div className="modal-icon">
+              <MapPin size={22} color="#E8A33D" />
+            </div>
+            <h2 className="modal-title">Delivery address</h2>
+            <p className="modal-sub">Tell us where to send your order.</p>
+
+            <label className="label">Full name</label>
+            <input className="plain-input" value={fullName} onChange={(e) => setFullName(e.target.value)} placeholder="Your full name" />
+
+            <label className="label" style={{ marginTop: 10 }}>Phone number</label>
+            <input className="plain-input" value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="10-digit mobile number" />
+
+            <label className="label" style={{ marginTop: 10 }}>Address</label>
+            <input className="plain-input" value={addressLine} onChange={(e) => setAddressLine(e.target.value)} placeholder="House no, street, area" />
+
+            <div className="form-grid" style={{ marginTop: 10 }}>
+              <div>
+                <label className="label">City</label>
+                <input className="plain-input" value={city} onChange={(e) => setCity(e.target.value)} />
+              </div>
+              <div>
+                <label className="label">Pincode</label>
+                <input className="plain-input" value={pincode} onChange={(e) => setPincode(e.target.value)} />
+              </div>
+            </div>
+
+            <label className="label" style={{ marginTop: 10 }}>Delivery area (sets courier charge)</label>
+            <select className="plain-input" value={areaId} onChange={(e) => setAreaId(e.target.value)}>
+              {COURIER_AREAS.map((a) => (
+                <option key={a.id} value={a.id}>{a.label}</option>
+              ))}
+            </select>
+
+            <div className="courier-note">
+              <Truck size={14} /> Courier charge for this area: <strong>{area.charge ? fmt(area.charge) : "Free"}</strong>
+            </div>
+
+            {error && <p className="error">{error}</p>}
+            <button className="primary-btn" onClick={submitAddress}>
+              Continue <ArrowRight size={16} />
+            </button>
+          </>
+        )}
+
+        {step === "review" && (
+          <>
+            <div className="modal-icon">
+              <ClipboardList size={22} color="#E8A33D" />
+            </div>
+            <h2 className="modal-title">Review &amp; pay</h2>
+            <div className="review-block">
+              <p><strong>{fullName}</strong> · {phone}</p>
+              <p>{addressLine}, {city} — {pincode}</p>
+              <p className="review-area">{area.label}</p>
+            </div>
+            <div className="total-row"><span>Subtotal</span><span>{fmt(subtotal)}</span></div>
+            <div className="total-row"><span>Courier charge</span><span>{area.charge ? fmt(area.charge) : "Free"}</span></div>
+            <div className="total-row"><span>Total</span><span className="total-amt">{fmt(total)}</span></div>
+            {error && <p className="error">{error}</p>}
+            <button className="primary-btn" onClick={submitOrder} disabled={busy}>
+              {busy ? "Processing payment…" : "Submit order"} {!busy && <ArrowRight size={16} />}
+            </button>
+            <button className="link-btn" onClick={() => setStep("address")} disabled={busy}>
+              Edit address
+            </button>
+          </>
+        )}
+
+        {step === "done" && (
+          <div className="sent-note">
+            <CheckCircle2 size={36} color="#5DCAA5" />
+            <h2 className="modal-title">Order placed!</h2>
+            <p>
+              Thank you, {fullName}. Your order total was <strong style={{ color: "#F4EEFA" }}>{fmt(total)}</strong>.
+              We'll reach out at {phone} to confirm delivery.
+            </p>
+            <button className="primary-btn" onClick={() => onPlaced(placedOrder)}>
+              Done
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Seller dashboard
 // ---------------------------------------------------------------------------
 
-function SellerDashboard({ session, onLogout, products }) {
+function SellerDashboard({ session, onLogout, products, setProducts }) {
   const [name, setName] = useState("");
   const [category, setCategory] = useState(CATEGORIES[0]);
   const [unit, setUnit] = useState("1 Box");
@@ -687,6 +959,29 @@ function SellerDashboard({ session, onLogout, products }) {
   const [uploading, setUploading] = useState(false);
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState("");
+  const [discountSettings, setDiscountSettingsState] = useState(null);
+  const [offerMonths, setOfferMonths] = useState(1);
+  const [applyingDiscount, setApplyingDiscount] = useState(false);
+  const [orders, setOrders] = useState([]);
+
+  useEffect(() => watchDiscountSettings(setDiscountSettingsState), []);
+  useEffect(() => watchOrders(setOrders), []);
+
+  async function handleApplyDiscount() {
+    setApplyingDiscount(true);
+    setNote("");
+    try {
+      const settings = await setDiscountValidity(offerMonths);
+      const refreshed = await applyGlobalDiscount(products, settings.percent);
+      if (refreshed) setProducts(refreshed); // demo mode only; live mode syncs via onSnapshot
+      setDiscountSettingsState(settings);
+      setNote(`${settings.percent}% discount applied to all products.`);
+    } catch (e) {
+      setNote("Failed: " + e.message);
+    } finally {
+      setApplyingDiscount(false);
+    }
+  }
 
   function handleFilePick(e) {
     const file = e.target.files?.[0];
@@ -757,6 +1052,7 @@ function SellerDashboard({ session, onLogout, products }) {
 
   return (
     <div className="page">
+      <FireworksBackground />
       <header className="header">
         <div className="header-inner">
           <div className="logo">
@@ -776,6 +1072,31 @@ function SellerDashboard({ session, onLogout, products }) {
       <main className="main narrow">
         <h1 className="dash-title">Product manager</h1>
         <p className="dash-sub">Add, price, and manage what buyers see in the storefront.</p>
+
+        <div className="discount-banner">
+          <Percent size={18} color="#E8A33D" />
+          {discountSettings ? (
+            <span>
+              <strong>{discountSettings.percent}% off</strong> across all products · valid till{" "}
+              <strong>{new Date(discountSettings.validUntil).toLocaleDateString("en-IN")}</strong>
+            </span>
+          ) : (
+            <span>No storewide offer is active yet — set one below.</span>
+          )}
+        </div>
+        <div className="discount-control">
+          <label className="label" style={{ margin: 0 }}>Offer validity (months)</label>
+          <input
+            type="number"
+            min="1"
+            className="discount-months-input"
+            value={offerMonths}
+            onChange={(e) => setOfferMonths(e.target.value)}
+          />
+          <button className="ghost-btn" onClick={handleApplyDiscount} disabled={applyingDiscount}>
+            <Percent size={14} /> {applyingDiscount ? "Applying…" : "Apply 20% discount to all products"}
+          </button>
+        </div>
 
         <div className="seller-form">
           <div className="form-grid">
@@ -855,6 +1176,38 @@ function SellerDashboard({ session, onLogout, products }) {
             </div>
           ))}
         </div>
+
+        <h2 className="cat-heading list-heading">
+          <ClipboardList size={16} /> Orders ({orders.length})
+        </h2>
+        {orders.length === 0 ? (
+          <p className="empty-note">No orders yet.</p>
+        ) : (
+          <div className="orders-list">
+            {orders.map((o) => (
+              <div key={o.id} className="order-card">
+                <div className="order-card-head">
+                  <span className="order-buyer">
+                    <User size={13} /> {o.buyerName} <Phone size={13} style={{ marginLeft: 6 }} /> {o.phone}
+                  </span>
+                  <span className="order-date">{new Date(o.createdAt).toLocaleString("en-IN")}</span>
+                </div>
+                <p className="order-address">
+                  <MapPin size={13} /> {o.address?.line}, {o.address?.city} — {o.address?.pincode} ({o.address?.area})
+                </p>
+                <ul className="order-items">
+                  {o.items.map((it, idx) => (
+                    <li key={idx}>{it.qty} × {it.name} — {fmt(it.price * it.qty)}</li>
+                  ))}
+                </ul>
+                <div className="order-total">
+                  <Truck size={13} /> Courier: {o.courierCharge ? fmt(o.courierCharge) : "Free"} · Total:{" "}
+                  <strong>{fmt(o.total)}</strong>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
       </main>
     </div>
   );

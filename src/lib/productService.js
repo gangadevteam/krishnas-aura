@@ -70,6 +70,31 @@ export async function seedCatalog() {
   }
 }
 
+// Re-prices every product to a common discount percentage (seller dashboard
+// "20% off all products" control). In demo mode this mutates the in-memory
+// seed catalog directly and returns the refreshed list, since there's no
+// Firestore snapshot listener to pick the change up automatically.
+export async function applyGlobalDiscount(products, percent) {
+  const pct = Number(percent);
+  if (!firebaseReady) {
+    SEED_PRODUCTS.forEach((p) => {
+      p.discount = Math.round(p.price * (pct / 100));
+      p.finalPrice = p.price - p.discount;
+    });
+    return SEED_PRODUCTS.slice();
+  }
+  const batchSize = 400;
+  for (let i = 0; i < products.length; i += batchSize) {
+    const batch = writeBatch(db);
+    products.slice(i, i + batchSize).forEach((p) => {
+      const discount = Math.round(p.price * (pct / 100));
+      batch.update(doc(db, "products", p.id), { discount, finalPrice: p.price - discount });
+    });
+    await batch.commit();
+  }
+  return null;
+}
+
 // ---- Cart -----------------------------------------------------------------
 
 export async function loadCart(uid) {
