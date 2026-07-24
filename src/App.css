@@ -1058,6 +1058,32 @@
   background: #5dcaa533;
   color: #5dcaa5;
 }
+.status-badge.status-cancelled {
+  background: #7a1f2b55;
+  color: #ff6b6b;
+}
+
+.status-cancelled-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: #7a1f2b33;
+  border: 1px solid #7a1f2b88;
+  color: #ff6b6b;
+  border-radius: 10px;
+  padding: 12px 14px;
+  font-size: 13.5px;
+  font-weight: 600;
+}
+
+.status-select:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.row-cancelled td {
+  opacity: 0.6;
+}
 
 /* Status stepper (buyer order detail) */
 .status-stepper {

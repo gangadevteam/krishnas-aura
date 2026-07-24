@@ -180,6 +180,16 @@ export async function getUserRole(uid) {
   return snap.exists() ? snap.data().role : "buyer";
 }
 
+// Buyer's saved full name + phone from their profile doc — used to prefill
+// the checkout form so they don't retype details already on file.
+export async function getUserProfile(uid) {
+  if (!firebaseReady) return { fullName: "", phone: "" };
+  const snap = await getDoc(doc(db, "users", uid));
+  if (!snap.exists()) return { fullName: "", phone: "" };
+  const data = snap.data();
+  return { fullName: data.fullName || "", phone: data.phone || "" };
+}
+
 export function watchAuth(callback) {
   if (!firebaseReady) return () => {};
   return onAuthStateChanged(auth, callback);

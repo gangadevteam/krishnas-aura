@@ -8,13 +8,16 @@ import {
 import { firebaseReady } from "./lib/firebase";
 import {
   signInWithGoogle, checkAccountExists, sendLoginLink, isFinishSignInLink,
-  completeEmailLinkSignIn, watchAuth, signOut, getUserRole, isSeller,
+  completeEmailLinkSignIn, watchAuth, signOut, getUserRole, getUserProfile, isSeller,
   backupCart, readCartBackup, savePhoneNumber,
 } from "./lib/authService";
 import {
   watchProducts, addProduct, removeProduct, seedCatalog, loadCart, saveCart, uploadProductImage,
 } from "./lib/productService";
-import { placeOrder, watchOrders, updateOrderStatus, COURIER_AREAS, ORDER_STATUSES } from "./lib/orderService";
+import {
+  placeOrder, watchOrders, updateOrderStatus, getLastOrder,
+  COURIER_AREAS, ORDER_STATUSES, ALL_ORDER_STATUSES,
+} from "./lib/orderService";
 import { CATEGORIES } from "./lib/catalog";
 import "./App.css";
 
@@ -217,7 +220,8 @@ export default function App() {
       watchAuth(async (user) => {
         if (user) {
           const role = await getUserRole(user.uid);
-          setSession({ uid: user.uid, email: user.email, role });
+          const profile = await getUserProfile(user.uid);
+          setSession({ uid: user.uid, email: user.email, role, ...profile });
           const saved = await loadCart(user.uid);
           if (Object.keys(saved).length) setCart(saved);
           cartLoaded.current = true;
@@ -819,9 +823,29 @@ function CheckoutModal({ session, cart, products, subtotal, onClose, onPlaced })
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [placedOrder, setPlacedOrder] = useState(null);
+  const prefillDone = useRef(false);
 
   const area = COURIER_AREAS.find((a) => a.id === areaId);
   const total = subtotal + area.charge;
+
+  // Prefill from the buyer's profile (name, phone) and — if they've ordered
+  // before — their most recently used delivery address, so returning buyers
+  // don't have to retype everything. All fields stay editable afterward.
+  useEffect(() => {
+    if (prefillDone.current) return;
+    prefillDone.current = true;
+    if (session.fullName) setFullName(session.fullName);
+    if (session.phone) setPhone(session.phone);
+    getLastOrder(session.uid).then((last) => {
+      if (!last) return;
+      setFullName((v) => v || last.buyerName || "");
+      setPhone((v) => v || last.phone || "");
+      setAddressLine((v) => v || last.address?.line || "");
+      setCity((v) => v || last.address?.city || "");
+      setPincode((v) => v || last.address?.pincode || "");
+      if (last.address?.areaId) setAreaId(last.address.areaId);
+    });
+  }, [session]);
 
   function submitAddress() {
     setError("");
@@ -847,7 +871,7 @@ function CheckoutModal({ session, cart, products, subtotal, onClose, onPlaced })
         buyerEmail: session.email,
         buyerName: fullName.trim(),
         phone: phone.trim(),
-        address: { line: addressLine.trim(), city: city.trim(), pincode: pincode.trim(), area: area.label },
+        address: { line: addressLine.trim(), city: city.trim(), pincode: pincode.trim(), area: area.label, areaId: area.id },
         items,
         subtotal,
         courierCharge: area.charge,
@@ -966,6 +990,13 @@ function CheckoutModal({ session, cart, products, subtotal, onClose, onPlaced })
 // ---------------------------------------------------------------------------
 
 function OrderStatusStepper({ status }) {
+  if (status === "cancelled") {
+    return (
+      <div className="status-cancelled-banner">
+        <X size={16} /> This order was cancelled.
+      </div>
+    );
+  }
   const currentIdx = ORDER_STATUSES.findIndex((s) => s.key === status);
   return (
     <div className="status-stepper">
@@ -1023,7 +1054,7 @@ function OrdersDrawer({ session, onClose }) {
               <p className="empty-note">You haven't placed any orders yet.</p>
             ) : (
               orders.map((o) => {
-                const label = ORDER_STATUSES.find((s) => s.key === o.status)?.label || "Order Placed";
+                const label = ALL_ORDER_STATUSES.find((s) => s.key === o.status)?.label || "Order Placed";
                 return (
                   <button key={o.id} className="order-summary-row" onClick={() => setActiveId(o.id)}>
                     <div className="cart-row-main">
@@ -1083,14 +1114,23 @@ function SellerDashboard({ session, onLogout, products }) {
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState("");
   const [orders, setOrders] = useState([]);
+  const [savingOrderId, setSavingOrderId] = useState(null);
 
   useEffect(() => watchOrders(setOrders), []);
 
+  // Awaits the write and only reports success once it has actually landed
+  // in the backend (Firestore, or localStorage in demo mode) — the select
+  // stays disabled and showing the order's last confirmed status until then.
   async function handleStatusChange(orderId, status) {
+    setSavingOrderId(orderId);
+    setNote("");
     try {
       await updateOrderStatus(orderId, status);
+      setNote("Status updated and saved.");
     } catch (e) {
       setNote("Failed to update status: " + e.message);
+    } finally {
+      setSavingOrderId(null);
     }
   }
 
@@ -1288,6 +1328,7 @@ function SellerDashboard({ session, onLogout, products }) {
             <>
               <h1 className="dash-title">Orders</h1>
               <p className="dash-sub">Every order placed by buyers, with live status control.</p>
+              {note && <p className="note">{note}</p>}
 
               {orders.length === 0 ? (
                 <p className="empty-note">No orders yet.</p>
@@ -1307,7 +1348,7 @@ function SellerDashboard({ session, onLogout, products }) {
                     </thead>
                     <tbody>
                       {orders.map((o) => (
-                        <tr key={o.id}>
+                        <tr key={o.id} className={o.status === "cancelled" ? "row-cancelled" : ""}>
                           <td>{o.buyerName}</td>
                           <td>
                             <Phone size={12} /> {o.phone}
@@ -1330,9 +1371,10 @@ function SellerDashboard({ session, onLogout, products }) {
                             <select
                               className="status-select"
                               value={o.status || "placed"}
+                              disabled={savingOrderId === o.id}
                               onChange={(e) => handleStatusChange(o.id, e.target.value)}
                             >
-                              {ORDER_STATUSES.map((s) => (
+                              {ALL_ORDER_STATUSES.map((s) => (
                                 <option key={s.key} value={s.key}>{s.label}</option>
                               ))}
                             </select>

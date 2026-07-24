@@ -4,7 +4,7 @@
 // DEMO MODE: orders are kept in localStorage so the seller dashboard still
 // has something to show without Firebase configured.
 
-import { collection, addDoc, updateDoc, doc, onSnapshot, query, orderBy, where } from "firebase/firestore";
+import { collection, addDoc, updateDoc, doc, getDocs, onSnapshot, query, orderBy, where } from "firebase/firestore";
 import { db, firebaseReady } from "./firebase";
 
 // Standard courier charges by delivery area. Shown to the buyer during
@@ -25,6 +25,14 @@ export const ORDER_STATUSES = [
   { key: "shipped", label: "Order Shipped" },
   { key: "delivered", label: "Delivered" },
 ];
+
+// A cancellation sits outside the normal progression (it can happen at any
+// point), so it's kept separate from ORDER_STATUSES — which stays a clean
+// linear list for rendering the buyer's step tracker — and only folded in
+// via ALL_ORDER_STATUSES for places that need every selectable/lookup value
+// (the seller's status dropdown, status-label lookups).
+export const CANCELLED_STATUS = { key: "cancelled", label: "Cancelled" };
+export const ALL_ORDER_STATUSES = [...ORDER_STATUSES, CANCELLED_STATUS];
 
 const DEMO_KEY = "ka_demo_orders";
 // Firing a same-tab event alongside the native "storage" event (which only
@@ -74,6 +82,13 @@ export async function updateOrderStatus(id, status) {
 
 // Pass `uid` to watch only that buyer's orders; omit it for the seller
 // dashboard, which reads every order.
+//
+// The buyer-scoped query filters by uid only (no server-side orderBy) — a
+// where() + orderBy() on two different fields needs a composite Firestore
+// index, and without one the listener fails silently (no error handler,
+// callback never fires) which is exactly what made "My Orders" appear
+// empty after a refresh. Sorting by createdAt happens client-side instead,
+// so this works with zero manual index setup.
 export function watchOrders(callback, uid) {
   if (!firebaseReady) {
     const emit = () => {
@@ -89,10 +104,31 @@ export function watchOrders(callback, uid) {
     };
   }
   const base = collection(db, "orders");
-  const q = uid
-    ? query(base, where("uid", "==", uid), orderBy("createdAt", "desc"))
-    : query(base, orderBy("createdAt", "desc"));
-  return onSnapshot(q, (snap) => {
-    callback(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
-  });
+  const q = uid ? query(base, where("uid", "==", uid)) : query(base, orderBy("createdAt", "desc"));
+  return onSnapshot(
+    q,
+    (snap) => {
+      const orders = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+      if (uid) orders.sort((a, b) => b.createdAt - a.createdAt);
+      callback(orders);
+    },
+    (err) => console.error("watchOrders failed:", err)
+  );
+}
+
+// One-off fetch of a buyer's most recently placed order (used to prefill
+// the checkout address with their last-used delivery details). Filters by
+// uid only, same reasoning as watchOrders above — avoids needing a
+// composite index for a query that only runs once anyway.
+export async function getLastOrder(uid) {
+  if (!firebaseReady) {
+    const orders = readDemoOrders()
+      .filter((o) => o.uid === uid)
+      .sort((a, b) => b.createdAt - a.createdAt);
+    return orders[0] || null;
+  }
+  const snap = await getDocs(query(collection(db, "orders"), where("uid", "==", uid)));
+  const orders = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+  orders.sort((a, b) => b.createdAt - a.createdAt);
+  return orders[0] || null;
 }
