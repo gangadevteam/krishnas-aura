@@ -274,6 +274,8 @@ export default function App() {
       return next;
     });
 
+  const clearCart = () => setCart({});
+
   if (finishing)
     return (
       <div className="page center-fill">
@@ -441,6 +443,7 @@ export default function App() {
           total={cartTotal}
           onClose={() => setCartOpen(false)}
           onChangeQty={changeQty}
+          onClearCart={clearCart}
           isLoggedIn={!!session}
           onLoginPrompt={() => {
             setCartOpen(false);
@@ -752,7 +755,8 @@ function PhonePrompt({ onClose, onSave }) {
 // Cart drawer
 // ---------------------------------------------------------------------------
 
-function CartDrawer({ cart, products, total, onClose, onChangeQty, isLoggedIn, onLoginPrompt, onCheckout }) {
+function CartDrawer({ cart, products, total, onClose, onChangeQty, onClearCart, isLoggedIn, onLoginPrompt, onCheckout }) {
+  const [confirmClear, setConfirmClear] = useState(false);
   const items = Object.entries(cart)
     .map(([id, qty]) => ({ product: products.find((p) => String(p.id) === String(id)), qty }))
     .filter((x) => x.product);
@@ -789,10 +793,34 @@ function CartDrawer({ cart, products, total, onClose, onChangeQty, isLoggedIn, o
                       <Plus size={13} />
                     </button>
                   </div>
+                  <p className="cart-row-subtotal">{fmt(product.finalPrice * qty)}</p>
                 </div>
               ))}
             </div>
             <div className="drawer-footer">
+              {confirmClear ? (
+                <div className="clear-confirm">
+                  <p>Are you sure you want to clear your cart?</p>
+                  <div className="clear-confirm-actions">
+                    <button
+                      className="ghost-btn"
+                      onClick={() => {
+                        onClearCart();
+                        setConfirmClear(false);
+                      }}
+                    >
+                      Yes, clear it
+                    </button>
+                    <button className="ghost-btn" onClick={() => setConfirmClear(false)}>
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <button className="clear-cart-btn" onClick={() => setConfirmClear(true)}>
+                  <Trash2 size={14} /> Clear all
+                </button>
+              )}
               <div className="total-row">
                 <span>Total</span>
                 <span className="total-amt">{fmt(total)}</span>
