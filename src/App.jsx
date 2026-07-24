@@ -1,8 +1,9 @@
 import React, { useState, useMemo, useEffect, useRef } from "react";
+import { createPortal } from "react-dom";
 import {
   Sparkles, ShoppingCart, User, Store, Mail, ArrowRight, X, Plus, Minus,
   LogOut, Package, Search, UploadCloud, CheckCircle2, UserPlus, Phone, Image as ImageIcon,
-  MapPin, Truck, Percent, ClipboardList,
+  MapPin, Truck, ClipboardList, ChevronLeft,
 } from "lucide-react";
 import { firebaseReady } from "./lib/firebase";
 import {
@@ -12,10 +13,8 @@ import {
 } from "./lib/authService";
 import {
   watchProducts, addProduct, removeProduct, seedCatalog, loadCart, saveCart, uploadProductImage,
-  applyGlobalDiscount,
 } from "./lib/productService";
-import { placeOrder, watchOrders, COURIER_AREAS } from "./lib/orderService";
-import { watchDiscountSettings, setDiscountValidity } from "./lib/settingsService";
+import { placeOrder, watchOrders, updateOrderStatus, COURIER_AREAS, ORDER_STATUSES } from "./lib/orderService";
 import { CATEGORIES } from "./lib/catalog";
 import "./App.css";
 
@@ -101,6 +100,11 @@ function Glyph({ category, size = 64, imageUrl }) {
 // that sits behind every page (storefront + seller dashboard). Fades the
 // previous frame instead of clearing it, so the canvas itself becomes the
 // dark night-sky backdrop with trailing sparks.
+//
+// Rendered via a portal straight onto <body>, outside the .page tree —
+// so it is never affected by an ancestor's stacking/containing-block
+// context, and its position:fixed box always spans the full viewport
+// no matter how far the page has scrolled or how tall the content is.
 // ---------------------------------------------------------------------------
 
 function FireworksBackground() {
@@ -163,7 +167,10 @@ function FireworksBackground() {
     };
   }, []);
 
-  return <canvas ref={canvasRef} className="fireworks-canvas" aria-hidden="true" />;
+  return createPortal(
+    <canvas ref={canvasRef} className="fireworks-canvas" aria-hidden="true" />,
+    document.body
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -181,6 +188,7 @@ export default function App() {
   const [finishing, setFinishing] = useState(false);
   const [needsPhone, setNeedsPhone] = useState(false);
   const [checkoutOpen, setCheckoutOpen] = useState(false);
+  const [ordersOpen, setOrdersOpen] = useState(false);
   const cartLoaded = useRef(false);
 
   // Live product feed
@@ -275,7 +283,6 @@ export default function App() {
         session={session}
         onLogout={signOutAnd(setSession)}
         products={products}
-        setProducts={setProducts}
       />
     );
 
@@ -299,13 +306,18 @@ export default function App() {
               {cartCount > 0 && <span className="cart-badge">{cartCount}</span>}
             </button>
             {session ? (
-              <div className="user-chip">
-                <User size={15} />
-                <span>{session.email}</span>
-                <button className="icon-btn" onClick={signOutAnd(setSession)} aria-label="Log out">
-                  <LogOut size={14} />
+              <>
+                <button className="ghost-btn" onClick={() => setOrdersOpen(true)}>
+                  <ClipboardList size={15} /> My Orders
                 </button>
-              </div>
+                <div className="user-chip">
+                  <User size={15} />
+                  <span>{session.email}</span>
+                  <button className="icon-btn" onClick={signOutAnd(setSession)} aria-label="Log out">
+                    <LogOut size={14} />
+                  </button>
+                </div>
+              </>
             ) : (
               <button className="seller-btn" onClick={() => setAuthOpen(true)}>
                 <User size={15} /> Login
@@ -447,6 +459,9 @@ export default function App() {
             setCheckoutOpen(false);
           }}
         />
+      )}
+      {ordersOpen && session && (
+        <OrdersDrawer session={session} onClose={() => setOrdersOpen(false)} />
       )}
     </div>
   );
@@ -945,10 +960,118 @@ function CheckoutModal({ session, cart, products, subtotal, onClose, onPlaced })
 }
 
 // ---------------------------------------------------------------------------
+// Order status stepper — shared visual for "where is my order", driven by
+// ORDER_STATUSES so the buyer view and the seller's status control can
+// never disagree on the progression or its labels.
+// ---------------------------------------------------------------------------
+
+function OrderStatusStepper({ status }) {
+  const currentIdx = ORDER_STATUSES.findIndex((s) => s.key === status);
+  return (
+    <div className="status-stepper">
+      {ORDER_STATUSES.map((s, idx) => (
+        <div
+          key={s.key}
+          className={
+            "status-step" +
+            (idx < currentIdx ? " done" : idx === currentIdx ? " active" : "")
+          }
+        >
+          <span className="status-dot">
+            {idx < currentIdx ? <CheckCircle2 size={14} /> : idx + 1}
+          </span>
+          <span className="status-label">{s.label}</span>
+          {idx < ORDER_STATUSES.length - 1 && <span className="status-line" />}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Buyer "My Orders" — a list of the signed-in buyer's own orders; clicking
+// one shows its live status (set by the seller) alongside its full details.
+// ---------------------------------------------------------------------------
+
+function OrdersDrawer({ session, onClose }) {
+  const [orders, setOrders] = useState([]);
+  const [activeId, setActiveId] = useState(null);
+
+  useEffect(() => watchOrders(setOrders, session.uid), [session.uid]);
+
+  const active = orders.find((o) => o.id === activeId);
+
+  return (
+    <div className="overlay" onClick={onClose}>
+      <div className="drawer" onClick={(e) => e.stopPropagation()}>
+        <div className="drawer-header">
+          {active ? (
+            <button className="back-btn" onClick={() => setActiveId(null)}>
+              <ChevronLeft size={16} /> My Orders
+            </button>
+          ) : (
+            <h2 className="modal-title">My Orders</h2>
+          )}
+          <button className="modal-close static" onClick={onClose} aria-label="Close">
+            <X size={18} />
+          </button>
+        </div>
+
+        {!active && (
+          <div className="drawer-scroll">
+            {orders.length === 0 ? (
+              <p className="empty-note">You haven't placed any orders yet.</p>
+            ) : (
+              orders.map((o) => {
+                const label = ORDER_STATUSES.find((s) => s.key === o.status)?.label || "Order Placed";
+                return (
+                  <button key={o.id} className="order-summary-row" onClick={() => setActiveId(o.id)}>
+                    <div className="cart-row-main">
+                      <p className="cart-row-name">
+                        {o.items.length} item{o.items.length === 1 ? "" : "s"} · {fmt(o.total)}
+                      </p>
+                      <p className="cart-row-price">{new Date(o.createdAt).toLocaleString("en-IN")}</p>
+                    </div>
+                    <span className={"status-badge status-" + (o.status || "placed")}>{label}</span>
+                  </button>
+                );
+              })
+            )}
+          </div>
+        )}
+
+        {active && (
+          <div className="drawer-scroll">
+            <OrderStatusStepper status={active.status || "placed"} />
+            <div className="review-block" style={{ marginTop: 18 }}>
+              <p><strong>{active.buyerName}</strong> · {active.phone}</p>
+              <p>{active.address?.line}, {active.address?.city} — {active.address?.pincode}</p>
+              <p className="review-area">{active.address?.area}</p>
+            </div>
+            <ul className="order-items">
+              {active.items.map((it, idx) => (
+                <li key={idx}>{it.qty} × {it.name} — {fmt(it.price * it.qty)}</li>
+              ))}
+            </ul>
+            <div className="total-row"><span>Subtotal</span><span>{fmt(active.subtotal)}</span></div>
+            <div className="total-row"><span>Courier charge</span><span>{active.courierCharge ? fmt(active.courierCharge) : "Free"}</span></div>
+            <div className="total-row"><span>Total</span><span className="total-amt">{fmt(active.total)}</span></div>
+            <p className="order-date" style={{ marginTop: 10 }}>
+              Placed {new Date(active.createdAt).toLocaleString("en-IN")}
+            </p>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Seller dashboard
 // ---------------------------------------------------------------------------
 
-function SellerDashboard({ session, onLogout, products, setProducts }) {
+function SellerDashboard({ session, onLogout, products }) {
+  const [view, setView] = useState("products"); // products | orders
   const [name, setName] = useState("");
   const [category, setCategory] = useState(CATEGORIES[0]);
   const [unit, setUnit] = useState("1 Box");
@@ -959,27 +1082,15 @@ function SellerDashboard({ session, onLogout, products, setProducts }) {
   const [uploading, setUploading] = useState(false);
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState("");
-  const [discountSettings, setDiscountSettingsState] = useState(null);
-  const [offerMonths, setOfferMonths] = useState(1);
-  const [applyingDiscount, setApplyingDiscount] = useState(false);
   const [orders, setOrders] = useState([]);
 
-  useEffect(() => watchDiscountSettings(setDiscountSettingsState), []);
   useEffect(() => watchOrders(setOrders), []);
 
-  async function handleApplyDiscount() {
-    setApplyingDiscount(true);
-    setNote("");
+  async function handleStatusChange(orderId, status) {
     try {
-      const settings = await setDiscountValidity(offerMonths);
-      const refreshed = await applyGlobalDiscount(products, settings.percent);
-      if (refreshed) setProducts(refreshed); // demo mode only; live mode syncs via onSnapshot
-      setDiscountSettingsState(settings);
-      setNote(`${settings.percent}% discount applied to all products.`);
+      await updateOrderStatus(orderId, status);
     } catch (e) {
-      setNote("Failed: " + e.message);
-    } finally {
-      setApplyingDiscount(false);
+      setNote("Failed to update status: " + e.message);
     }
   }
 
@@ -1069,146 +1180,173 @@ function SellerDashboard({ session, onLogout, products, setProducts }) {
         </div>
       </header>
 
-      <main className="main narrow">
-        <h1 className="dash-title">Product manager</h1>
-        <p className="dash-sub">Add, price, and manage what buyers see in the storefront.</p>
-
-        <div className="discount-banner">
-          <Percent size={18} color="#E8A33D" />
-          {discountSettings ? (
-            <span>
-              <strong>{discountSettings.percent}% off</strong> across all products · valid till{" "}
-              <strong>{new Date(discountSettings.validUntil).toLocaleDateString("en-IN")}</strong>
-            </span>
-          ) : (
-            <span>No storewide offer is active yet — set one below.</span>
-          )}
-        </div>
-        <div className="discount-control">
-          <label className="label" style={{ margin: 0 }}>Offer validity (months)</label>
-          <input
-            type="number"
-            min="1"
-            className="discount-months-input"
-            value={offerMonths}
-            onChange={(e) => setOfferMonths(e.target.value)}
-          />
-          <button className="ghost-btn" onClick={handleApplyDiscount} disabled={applyingDiscount}>
-            <Percent size={14} /> {applyingDiscount ? "Applying…" : "Apply 20% discount to all products"}
+      <div className="seller-shell">
+        <nav className="side-nav">
+          <button
+            className={"side-nav-btn" + (view === "products" ? " active" : "")}
+            onClick={() => setView("products")}
+          >
+            <Package size={16} /> Products
           </button>
-        </div>
+          <button
+            className={"side-nav-btn" + (view === "orders" ? " active" : "")}
+            onClick={() => setView("orders")}
+          >
+            <ClipboardList size={16} /> Orders
+            {orders.length > 0 && <span className="side-nav-count">{orders.length}</span>}
+          </button>
+        </nav>
 
-        <div className="seller-form">
-          <div className="form-grid">
-            <div>
-              <label className="label">Product name</label>
-              <input value={name} onChange={(e) => setName(e.target.value)} placeholder={'e.g. 5" Bagupali'} />
-            </div>
-            <div>
-              <label className="label">Category</label>
-              <select value={category} onChange={(e) => setCategory(e.target.value)}>
-                {CATEGORIES.map((c) => (
-                  <option key={c}>{c}</option>
-                ))}
-              </select>
-            </div>
-            <div>
-              <label className="label">Unit</label>
-              <select value={unit} onChange={(e) => setUnit(e.target.value)}>
-                <option>1 Pkt</option>
-                <option>1 Box</option>
-              </select>
-            </div>
-            <div>
-              <label className="label">Price (₹)</label>
-              <input type="number" value={price} onChange={(e) => setPrice(e.target.value)} placeholder="0" />
-            </div>
-            <div>
-              <label className="label">Discount (%)</label>
-              <input type="number" value={discount} onChange={(e) => setDiscount(e.target.value)} />
-            </div>
-            <div>
-              <label className="label">Product photo</label>
-              {imagePreview ? (
-                <div className="image-preview">
-                  <img src={imagePreview} alt="Preview" />
-                  <button type="button" className="image-remove" onClick={clearImage} aria-label="Remove photo">
-                    <X size={14} />
+        <main className="main seller-content">
+          {view === "products" && (
+            <>
+              <h1 className="dash-title">Product manager</h1>
+              <p className="dash-sub">Add, price, and manage what buyers see in the storefront.</p>
+
+              <div className="seller-form">
+                <div className="form-grid">
+                  <div>
+                    <label className="label">Product name</label>
+                    <input value={name} onChange={(e) => setName(e.target.value)} placeholder={'e.g. 5" Bagupali'} />
+                  </div>
+                  <div>
+                    <label className="label">Category</label>
+                    <select value={category} onChange={(e) => setCategory(e.target.value)}>
+                      {CATEGORIES.map((c) => (
+                        <option key={c}>{c}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="label">Unit</label>
+                    <select value={unit} onChange={(e) => setUnit(e.target.value)}>
+                      <option>1 Pkt</option>
+                      <option>1 Box</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="label">Price (₹)</label>
+                    <input type="number" value={price} onChange={(e) => setPrice(e.target.value)} placeholder="0" />
+                  </div>
+                  <div>
+                    <label className="label">Discount (%)</label>
+                    <input type="number" value={discount} onChange={(e) => setDiscount(e.target.value)} />
+                  </div>
+                  <div>
+                    <label className="label">Product photo</label>
+                    {imagePreview ? (
+                      <div className="image-preview">
+                        <img src={imagePreview} alt="Preview" />
+                        <button type="button" className="image-remove" onClick={clearImage} aria-label="Remove photo">
+                          <X size={14} />
+                        </button>
+                      </div>
+                    ) : (
+                      <label className="file-picker">
+                        <ImageIcon size={16} color="#8A7BAE" />
+                        <span>Choose photo…</span>
+                        <input type="file" accept="image/*" onChange={handleFilePick} hidden />
+                      </label>
+                    )}
+                  </div>
+                </div>
+                <div className="form-actions">
+                  <button className="primary-btn inline" onClick={handleAdd} disabled={busy}>
+                    <Plus size={16} /> {uploading ? "Uploading photo…" : busy ? "Adding…" : "Add product"}
+                  </button>
+                  <button className="ghost-btn" onClick={handleSeed} disabled={busy} title="Copy the built-in catalog into Firestore">
+                    <UploadCloud size={15} /> Seed full catalog
                   </button>
                 </div>
+                {note && <p className="note">{note}</p>}
+              </div>
+
+              <h2 className="cat-heading list-heading">
+                <Package size={16} /> Current catalog ({products.length} items)
+              </h2>
+              <div className="seller-list">
+                {products.map((p) => (
+                  <div key={p.id} className="seller-row">
+                    <Glyph category={p.category} imageUrl={p.imageUrl} size={40} />
+                    <div className="cart-row-main">
+                      <p className="cart-row-name">{p.name}</p>
+                      <p className="cart-row-price">
+                        {p.category} · {p.unit}
+                      </p>
+                    </div>
+                    <span className="row-price">{fmt(p.finalPrice)}</span>
+                    <button className="icon-btn" onClick={() => handleRemove(p.id)} aria-label="Remove">
+                      <X size={15} />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </>
+          )}
+
+          {view === "orders" && (
+            <>
+              <h1 className="dash-title">Orders</h1>
+              <p className="dash-sub">Every order placed by buyers, with live status control.</p>
+
+              {orders.length === 0 ? (
+                <p className="empty-note">No orders yet.</p>
               ) : (
-                <label className="file-picker">
-                  <ImageIcon size={16} color="#8A7BAE" />
-                  <span>Choose photo…</span>
-                  <input type="file" accept="image/*" onChange={handleFilePick} hidden />
-                </label>
+                <div className="orders-table-wrap">
+                  <table className="orders-table">
+                    <thead>
+                      <tr>
+                        <th>Buyer</th>
+                        <th>Contact</th>
+                        <th>Address</th>
+                        <th>Items</th>
+                        <th>Total</th>
+                        <th>Date</th>
+                        <th>Status</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {orders.map((o) => (
+                        <tr key={o.id}>
+                          <td>{o.buyerName}</td>
+                          <td>
+                            <Phone size={12} /> {o.phone}
+                          </td>
+                          <td>
+                            {o.address?.line}, {o.address?.city} — {o.address?.pincode} ({o.address?.area})
+                          </td>
+                          <td>
+                            <ul className="order-items">
+                              {o.items.map((it, idx) => (
+                                <li key={idx}>{it.qty} × {it.name}</li>
+                              ))}
+                            </ul>
+                          </td>
+                          <td>
+                            <strong>{fmt(o.total)}</strong>
+                          </td>
+                          <td>{new Date(o.createdAt).toLocaleDateString("en-IN")}</td>
+                          <td>
+                            <select
+                              className="status-select"
+                              value={o.status || "placed"}
+                              onChange={(e) => handleStatusChange(o.id, e.target.value)}
+                            >
+                              {ORDER_STATUSES.map((s) => (
+                                <option key={s.key} value={s.key}>{s.label}</option>
+                              ))}
+                            </select>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
               )}
-            </div>
-          </div>
-          <div className="form-actions">
-            <button className="primary-btn inline" onClick={handleAdd} disabled={busy}>
-              <Plus size={16} /> {uploading ? "Uploading photo…" : busy ? "Adding…" : "Add product"}
-            </button>
-            <button className="ghost-btn" onClick={handleSeed} disabled={busy} title="Copy the built-in catalog into Firestore">
-              <UploadCloud size={15} /> Seed full catalog
-            </button>
-          </div>
-          {note && <p className="note">{note}</p>}
-        </div>
-
-        <h2 className="cat-heading list-heading">
-          <Package size={16} /> Current catalog ({products.length} items)
-        </h2>
-        <div className="seller-list">
-          {products.map((p) => (
-            <div key={p.id} className="seller-row">
-              <Glyph category={p.category} imageUrl={p.imageUrl} size={40} />
-              <div className="cart-row-main">
-                <p className="cart-row-name">{p.name}</p>
-                <p className="cart-row-price">
-                  {p.category} · {p.unit}
-                </p>
-              </div>
-              <span className="row-price">{fmt(p.finalPrice)}</span>
-              <button className="icon-btn" onClick={() => handleRemove(p.id)} aria-label="Remove">
-                <X size={15} />
-              </button>
-            </div>
-          ))}
-        </div>
-
-        <h2 className="cat-heading list-heading">
-          <ClipboardList size={16} /> Orders ({orders.length})
-        </h2>
-        {orders.length === 0 ? (
-          <p className="empty-note">No orders yet.</p>
-        ) : (
-          <div className="orders-list">
-            {orders.map((o) => (
-              <div key={o.id} className="order-card">
-                <div className="order-card-head">
-                  <span className="order-buyer">
-                    <User size={13} /> {o.buyerName} <Phone size={13} style={{ marginLeft: 6 }} /> {o.phone}
-                  </span>
-                  <span className="order-date">{new Date(o.createdAt).toLocaleString("en-IN")}</span>
-                </div>
-                <p className="order-address">
-                  <MapPin size={13} /> {o.address?.line}, {o.address?.city} — {o.address?.pincode} ({o.address?.area})
-                </p>
-                <ul className="order-items">
-                  {o.items.map((it, idx) => (
-                    <li key={idx}>{it.qty} × {it.name} — {fmt(it.price * it.qty)}</li>
-                  ))}
-                </ul>
-                <div className="order-total">
-                  <Truck size={13} /> Courier: {o.courierCharge ? fmt(o.courierCharge) : "Free"} · Total:{" "}
-                  <strong>{fmt(o.total)}</strong>
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-      </main>
+            </>
+          )}
+        </main>
+      </div>
     </div>
   );
 }

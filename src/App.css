@@ -9,12 +9,11 @@
 .fireworks-canvas {
   position: fixed;
   inset: 0;
-  z-index: 0;
+  width: 100vw;
+  height: 100vh;
+  height: 100dvh;
+  z-index: -1;
   pointer-events: none;
-}
-.page > * {
-  position: relative;
-  z-index: 1;
 }
 .center-fill {
   display: flex;
@@ -875,75 +874,120 @@
   white-space: nowrap;
 }
 
-/* Discount banner + control */
-.discount-banner {
+/* Seller shell: side nav + content */
+.seller-shell {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 0 20px 60px;
+  display: flex;
+  align-items: flex-start;
+  gap: 28px;
+}
+.side-nav {
+  flex-shrink: 0;
+  width: 200px;
+  position: sticky;
+  top: 84px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  background: #1e1638;
+  border: 1px solid #2e2350;
+  border-radius: 14px;
+  padding: 10px;
+}
+.side-nav-btn {
   display: flex;
   align-items: center;
   gap: 10px;
-  background: linear-gradient(90deg, #2e2350, #1e1638);
-  border: 1px solid #e8a33d55;
-  border-radius: 12px;
-  padding: 14px 18px;
-  font-size: 13.5px;
+  background: transparent;
+  border: none;
+  color: #b8a9d9;
+  border-radius: 8px;
+  padding: 10px 12px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  text-align: left;
+}
+.side-nav-btn:hover {
+  background: #2e2350;
+  color: #f4eefa;
+}
+.side-nav-btn.active {
+  background: #e8a33d;
+  color: #2b1a05;
+}
+.side-nav-count {
+  margin-left: auto;
+  background: rgba(0, 0, 0, 0.18);
+  border-radius: 10px;
+  font-size: 11px;
+  padding: 1px 7px;
+}
+.seller-content {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  padding: 32px 0 0;
+}
+
+/* Orders table (seller) */
+.orders-table-wrap {
+  overflow-x: auto;
+  background: #1e1638;
+  border: 1px solid #2e2350;
+  border-radius: 14px;
+}
+.orders-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+.orders-table th,
+.orders-table td {
+  text-align: left;
+  padding: 12px 14px;
+  border-bottom: 1px solid #2e2350;
+  vertical-align: top;
+  white-space: nowrap;
+}
+.orders-table td {
   color: #dcd2f5;
-  margin-bottom: 12px;
 }
-.discount-control {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  flex-wrap: wrap;
-  margin-bottom: 24px;
+.orders-table th {
+  color: #8a7bae;
+  font-size: 11.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  font-weight: 600;
 }
-.discount-months-input {
-  width: 70px;
+.orders-table tr:last-child td {
+  border-bottom: none;
+}
+.orders-table td:nth-child(3) {
+  white-space: normal;
+  max-width: 220px;
+}
+.orders-table .order-items {
+  white-space: normal;
+  min-width: 160px;
+}
+.status-select {
   background: #150c2b;
   border: 1px solid #3d2f63;
   border-radius: 8px;
-  padding: 8px 10px;
+  padding: 7px 10px;
   color: #f4eefa;
-  font-size: 14px;
+  font-size: 12.5px;
   outline: none;
+  cursor: pointer;
 }
 
-/* Orders */
-.orders-list {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-.order-card {
-  background: #1e1638;
-  border: 1px solid #2e2350;
-  border-radius: 12px;
-  padding: 14px 16px;
-}
-.order-card-head {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin-bottom: 6px;
-}
-.order-buyer {
-  display: flex;
-  align-items: center;
-  font-size: 13.5px;
-  font-weight: 600;
-  gap: 4px;
-}
+/* Orders (buyer + shared) */
 .order-date {
   font-size: 11.5px;
   color: #8a7bae;
-}
-.order-address {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  font-size: 12.5px;
-  color: #b8a9d9;
-  margin: 0 0 8px;
 }
 .order-items {
   list-style: none;
@@ -959,12 +1003,124 @@
 .order-items li:last-child {
   border-bottom: none;
 }
-.order-total {
+.order-summary-row {
+  width: 100%;
   display: flex;
   align-items: center;
-  gap: 5px;
-  font-size: 12.5px;
+  justify-content: space-between;
+  gap: 10px;
+  background: transparent;
+  border: none;
+  border-bottom: 1px solid #2e2350;
+  padding: 12px 0;
+  cursor: pointer;
+  text-align: left;
+  color: inherit;
+  font-family: inherit;
+}
+.order-summary-row:hover .cart-row-name {
+  color: #e8a33d;
+}
+.back-btn {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  background: transparent;
+  border: none;
+  color: #f4eefa;
+  font-size: 18px;
+  font-weight: 700;
+  cursor: pointer;
+  padding: 0;
+}
+
+/* Status badges */
+.status-badge {
+  flex-shrink: 0;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 4px 10px;
+  border-radius: 20px;
+  white-space: nowrap;
+  background: #2e2350;
   color: #b8a9d9;
+}
+.status-badge.status-paid,
+.status-badge.status-confirmed {
+  background: #3c2a6e;
+  color: #dcd2f5;
+}
+.status-badge.status-shipped {
+  background: #e8a33d33;
+  color: #e8a33d;
+}
+.status-badge.status-delivered {
+  background: #5dcaa533;
+  color: #5dcaa5;
+}
+
+/* Status stepper (buyer order detail) */
+.status-stepper {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+.status-step {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  position: relative;
+  padding-bottom: 22px;
+}
+.status-step:last-child {
+  padding-bottom: 0;
+}
+.status-dot {
+  flex-shrink: 0;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: #150c2b;
+  border: 2px solid #3d2f63;
+  color: #8a7bae;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  font-weight: 700;
+  z-index: 1;
+}
+.status-line {
+  position: absolute;
+  left: 13px;
+  top: 26px;
+  width: 2px;
+  height: 22px;
+  background: #3d2f63;
+}
+.status-label {
+  font-size: 13.5px;
+  color: #8a7bae;
+  font-weight: 600;
+}
+.status-step.done .status-dot {
+  background: #5dcaa5;
+  border-color: #5dcaa5;
+  color: #0a0616;
+}
+.status-step.done .status-line {
+  background: #5dcaa5;
+}
+.status-step.done .status-label {
+  color: #dcd2f5;
+}
+.status-step.active .status-dot {
+  background: #e8a33d;
+  border-color: #e8a33d;
+  color: #2b1a05;
+}
+.status-step.active .status-label {
+  color: #f4eefa;
 }
 
 /* Mobile */
@@ -980,5 +1136,23 @@
   .grid {
     grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
     gap: 10px;
+  }
+}
+
+@media (max-width: 720px) {
+  .seller-shell {
+    flex-direction: column;
+  }
+  .side-nav {
+    position: static;
+    width: 100%;
+    flex-direction: row;
+  }
+  .side-nav-btn {
+    flex: 1;
+    justify-content: center;
+  }
+  .seller-content {
+    padding-top: 20px;
   }
 }
