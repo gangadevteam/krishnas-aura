@@ -2,8 +2,8 @@ import React, { useState, useMemo, useEffect, useRef } from "react";
 import { createPortal } from "react-dom";
 import {
   Sparkles, ShoppingCart, User, Store, Mail, ArrowRight, X, Plus, Minus,
-  LogOut, Package, Search, UploadCloud, CheckCircle2, UserPlus, Phone, Image as ImageIcon,
-  MapPin, Truck, ClipboardList, ChevronLeft,
+  LogOut, Package, Search, CheckCircle2, UserPlus, Phone, Image as ImageIcon,
+  MapPin, Truck, ClipboardList, ChevronLeft, Pencil, Trash2,
 } from "lucide-react";
 import { firebaseReady } from "./lib/firebase";
 import {
@@ -12,7 +12,8 @@ import {
   backupCart, readCartBackup, savePhoneNumber,
 } from "./lib/authService";
 import {
-  watchProducts, addProduct, removeProduct, seedCatalog, loadCart, saveCart, uploadProductImage,
+  watchProducts, addProduct, updateProduct, removeProduct, removeDuplicateProducts,
+  loadCart, saveCart, uploadProductImage,
 } from "./lib/productService";
 import {
   placeOrder, watchOrders, updateOrderStatus, getLastOrder,
@@ -1113,10 +1114,33 @@ function SellerDashboard({ session, onLogout, products }) {
   const [uploading, setUploading] = useState(false);
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState("");
+  const [toast, setToast] = useState("");
   const [orders, setOrders] = useState([]);
   const [savingOrderId, setSavingOrderId] = useState(null);
+  const [editingProduct, setEditingProduct] = useState(null);
+  const [catalogSearch, setCatalogSearch] = useState("");
+  const [catalogSort, setCatalogSort] = useState("name-asc");
 
   useEffect(() => watchOrders(setOrders), []);
+
+  useEffect(() => {
+    if (!toast) return;
+    const t = setTimeout(() => setToast(""), 3000);
+    return () => clearTimeout(t);
+  }, [toast]);
+
+  const visibleProducts = useMemo(() => {
+    const q = catalogSearch.trim().toLowerCase();
+    const list = q ? products.filter((p) => p.name.toLowerCase().includes(q)) : products.slice();
+    const sorters = {
+      "name-asc": (a, b) => a.name.localeCompare(b.name),
+      "name-desc": (a, b) => b.name.localeCompare(a.name),
+      "price-asc": (a, b) => a.finalPrice - b.finalPrice,
+      "price-desc": (a, b) => b.finalPrice - a.finalPrice,
+      category: (a, b) => a.category.localeCompare(b.category) || a.name.localeCompare(b.name),
+    };
+    return list.sort(sorters[catalogSort] || sorters["name-asc"]);
+  }, [products, catalogSearch, catalogSort]);
 
   // Awaits the write and only reports success once it has actually landed
   // in the backend (Firestore, or localStorage in demo mode) — the select
@@ -1171,7 +1195,7 @@ function SellerDashboard({ session, onLogout, products }) {
       setName("");
       setPrice("");
       clearImage();
-      setNote("Product added.");
+      setToast("Product added successfully!");
     } catch (e) {
       setUploading(false);
       setNote(firebaseReady ? "Failed: " + e.message : "Demo mode — configure Firebase to save products.");
@@ -1180,14 +1204,14 @@ function SellerDashboard({ session, onLogout, products }) {
     }
   }
 
-  async function handleSeed() {
+  async function handleCleanupDuplicates() {
     setBusy(true);
     setNote("");
     try {
-      await seedCatalog();
-      setNote("Full catalog seeded to Firestore.");
+      const removed = await removeDuplicateProducts();
+      setNote(removed > 0 ? `Removed ${removed} duplicate product(s).` : "No duplicates found.");
     } catch (e) {
-      setNote(firebaseReady ? "Failed: " + e.message : "Demo mode — configure Firebase first.");
+      setNote(firebaseReady ? "Cleanup failed: " + e.message : "Demo mode — configure Firebase first.");
     } finally {
       setBusy(false);
     }
@@ -1204,6 +1228,11 @@ function SellerDashboard({ session, onLogout, products }) {
   return (
     <div className="page">
       <FireworksBackground />
+      {toast && (
+        <div className="toast toast-success">
+          <CheckCircle2 size={16} /> {toast}
+        </div>
+      )}
       <header className="header">
         <div className="header-inner">
           <div className="logo">
@@ -1294,18 +1323,50 @@ function SellerDashboard({ session, onLogout, products }) {
                   <button className="primary-btn inline" onClick={handleAdd} disabled={busy}>
                     <Plus size={16} /> {uploading ? "Uploading photo…" : busy ? "Adding…" : "Add product"}
                   </button>
-                  <button className="ghost-btn" onClick={handleSeed} disabled={busy} title="Copy the built-in catalog into Firestore">
-                    <UploadCloud size={15} /> Seed full catalog
+                  <button
+                    className="ghost-btn"
+                    onClick={handleCleanupDuplicates}
+                    disabled={busy}
+                    title="One-time cleanup: removes duplicate products left over from the old seed action. Remove this button once run."
+                  >
+                    <Trash2 size={15} /> Remove duplicates (one-time)
                   </button>
                 </div>
                 {note && <p className="note">{note}</p>}
               </div>
 
               <h2 className="cat-heading list-heading">
-                <Package size={16} /> Current catalog ({products.length} items)
+                <Package size={16} /> Current catalog ({visibleProducts.length} of {products.length} items)
               </h2>
+
+              <div className="catalog-controls">
+                <div className="search-box small">
+                  <Search size={15} color="#B8A9D9" />
+                  <input
+                    placeholder="Search products by name…"
+                    value={catalogSearch}
+                    onChange={(e) => setCatalogSearch(e.target.value)}
+                  />
+                </div>
+                <select
+                  className="plain-input sort-select"
+                  value={catalogSort}
+                  onChange={(e) => setCatalogSort(e.target.value)}
+                  aria-label="Sort catalog"
+                >
+                  <option value="name-asc">Name (A–Z)</option>
+                  <option value="name-desc">Name (Z–A)</option>
+                  <option value="price-asc">Price (Low–High)</option>
+                  <option value="price-desc">Price (High–Low)</option>
+                  <option value="category">Category</option>
+                </select>
+              </div>
+
+              {visibleProducts.length === 0 && (
+                <p className="empty-note">No products match your search.</p>
+              )}
               <div className="seller-list">
-                {products.map((p) => (
+                {visibleProducts.map((p) => (
                   <div key={p.id} className="seller-row">
                     <Glyph category={p.category} imageUrl={p.imageUrl} size={40} />
                     <div className="cart-row-main">
@@ -1315,9 +1376,14 @@ function SellerDashboard({ session, onLogout, products }) {
                       </p>
                     </div>
                     <span className="row-price">{fmt(p.finalPrice)}</span>
-                    <button className="icon-btn" onClick={() => handleRemove(p.id)} aria-label="Remove">
-                      <X size={15} />
-                    </button>
+                    <div className="seller-row-actions">
+                      <button className="icon-btn" onClick={() => setEditingProduct(p)} aria-label="Edit">
+                        <Pencil size={15} />
+                      </button>
+                      <button className="icon-btn" onClick={() => handleRemove(p.id)} aria-label="Remove">
+                        <X size={15} />
+                      </button>
+                    </div>
                   </div>
                 ))}
               </div>
@@ -1388,6 +1454,146 @@ function SellerDashboard({ session, onLogout, products }) {
             </>
           )}
         </main>
+      </div>
+
+      {editingProduct && (
+        <EditProductModal
+          product={editingProduct}
+          onClose={() => setEditingProduct(null)}
+          onSaved={() => {
+            setEditingProduct(null);
+            setToast("Product updated successfully!");
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Edit product modal — pre-filled with the product's current details.
+// ---------------------------------------------------------------------------
+
+function EditProductModal({ product, onClose, onSaved }) {
+  const [name, setName] = useState(product.name);
+  const [category, setCategory] = useState(product.category);
+  const [unit, setUnit] = useState(product.unit);
+  const [price, setPrice] = useState(String(product.price));
+  const [discount, setDiscount] = useState(
+    String(product.price ? Math.round((product.discount / product.price) * 100) : 0)
+  );
+  const [imageFile, setImageFile] = useState(null);
+  const [imagePreview, setImagePreview] = useState(product.imageUrl || "");
+  const [uploading, setUploading] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  function handleFilePick(e) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setImageFile(file);
+    setImagePreview(URL.createObjectURL(file));
+  }
+
+  function clearImage() {
+    setImageFile(null);
+    setImagePreview("");
+  }
+
+  async function submit() {
+    if (!name.trim() || !price) return setError("Enter a name and price.");
+    const p = Number(price);
+    const d = Math.round(p * (Number(discount || 0) / 100));
+    setBusy(true);
+    setError("");
+    try {
+      let imageUrl = imagePreview ? product.imageUrl || "" : "";
+      if (imageFile) {
+        setUploading(true);
+        imageUrl = await uploadProductImage(imageFile);
+        setUploading(false);
+      }
+      await updateProduct(product.id, {
+        name: name.trim(),
+        category,
+        unit,
+        price: p,
+        discount: d,
+        finalPrice: p - d,
+        imageUrl,
+      });
+      onSaved();
+    } catch (e) {
+      setUploading(false);
+      setError(firebaseReady ? "Failed: " + e.message : "Demo mode — configure Firebase to save products.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="overlay" onClick={busy ? undefined : onClose}>
+      <div className="modal" onClick={(e) => e.stopPropagation()}>
+        <button className="modal-close" onClick={onClose} aria-label="Close" disabled={busy}>
+          <X size={18} />
+        </button>
+        <div className="modal-icon">
+          <Pencil size={20} color="#E8A33D" />
+        </div>
+        <h2 className="modal-title">Edit product</h2>
+        <p className="modal-sub">Update this product's details and save.</p>
+
+        <div className="form-grid">
+          <div>
+            <label className="label">Product name</label>
+            <input className="plain-input" value={name} onChange={(e) => setName(e.target.value)} />
+          </div>
+          <div>
+            <label className="label">Category</label>
+            <select className="plain-input" value={category} onChange={(e) => setCategory(e.target.value)}>
+              {CATEGORIES.map((c) => (
+                <option key={c}>{c}</option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label className="label">Unit</label>
+            <select className="plain-input" value={unit} onChange={(e) => setUnit(e.target.value)}>
+              <option>1 Pkt</option>
+              <option>1 Box</option>
+            </select>
+          </div>
+          <div>
+            <label className="label">Price (₹)</label>
+            <input className="plain-input" type="number" value={price} onChange={(e) => setPrice(e.target.value)} />
+          </div>
+          <div>
+            <label className="label">Discount (%)</label>
+            <input className="plain-input" type="number" value={discount} onChange={(e) => setDiscount(e.target.value)} />
+          </div>
+          <div>
+            <label className="label">Product photo</label>
+            {imagePreview ? (
+              <div className="image-preview">
+                <img src={imagePreview} alt="Preview" />
+                <button type="button" className="image-remove" onClick={clearImage} aria-label="Remove photo">
+                  <X size={14} />
+                </button>
+              </div>
+            ) : (
+              <label className="file-picker">
+                <ImageIcon size={16} color="#8A7BAE" />
+                <span>Choose photo…</span>
+                <input type="file" accept="image/*" onChange={handleFilePick} hidden />
+              </label>
+            )}
+          </div>
+        </div>
+
+        {error && <p className="error">{error}</p>}
+        <button className="primary-btn" onClick={submit} disabled={busy}>
+          {uploading ? "Uploading photo…" : busy ? "Saving…" : "Save changes"}
+        </button>
       </div>
     </div>
   );

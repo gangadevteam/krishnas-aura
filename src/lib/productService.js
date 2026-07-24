@@ -12,6 +12,7 @@ import {
   doc,
   setDoc,
   getDoc,
+  getDocs,
   writeBatch,
 } from "firebase/firestore";
 import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
@@ -56,18 +57,27 @@ export async function removeProduct(id) {
   await deleteDoc(doc(db, "products", id));
 }
 
-// One-time seeding of the full catalog into Firestore (seller only).
-export async function seedCatalog() {
+// One-time cleanup: removes duplicate products left over from a previous
+// catalog seed, matched by identical name + category + unit (case/whitespace
+// insensitive on name). Keeps the first copy of each, deletes the rest.
+export async function removeDuplicateProducts() {
   if (!firebaseReady) throw new Error("Firebase not configured");
-  const batchSize = 400; // Firestore batch limit is 500 ops
-  for (let i = 0; i < SEED_PRODUCTS.length; i += batchSize) {
+  const snap = await getDocs(collection(db, "products"));
+  const items = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+  const seen = new Set();
+  const duplicateIds = [];
+  for (const p of items) {
+    const key = [String(p.name || "").trim().toLowerCase(), p.category, p.unit].join("|");
+    if (seen.has(key)) duplicateIds.push(p.id);
+    else seen.add(key);
+  }
+  const batchSize = 400;
+  for (let i = 0; i < duplicateIds.length; i += batchSize) {
     const batch = writeBatch(db);
-    SEED_PRODUCTS.slice(i, i + batchSize).forEach((p) => {
-      const { id, ...data } = p;
-      batch.set(doc(collection(db, "products")), data);
-    });
+    duplicateIds.slice(i, i + batchSize).forEach((id) => batch.delete(doc(db, "products", id)));
     await batch.commit();
   }
+  return duplicateIds.length;
 }
 
 // Re-prices every product to a common discount percentage (seller dashboard
