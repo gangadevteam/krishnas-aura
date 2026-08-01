@@ -15,8 +15,7 @@ import {
   getDocs,
   writeBatch,
 } from "firebase/firestore";
-import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
-import { db, storage, firebaseReady } from "./firebase";
+import { db, firebaseReady } from "./firebase";
 import { SEED_PRODUCTS } from "./catalog";
 
 export function watchProducts(callback) {
@@ -37,14 +36,23 @@ export async function addProduct(product) {
   await addDoc(collection(db, "products"), product);
 }
 
-// Uploads a product photo to Firebase Storage and returns its public URL.
+// Uploads a product photo to ImgBB and returns its public URL.
 export async function uploadProductImage(file) {
-  if (!firebaseReady) throw new Error("Firebase not configured");
-  const safeName = file.name.replace(/[^a-zA-Z0-9.\-_]/g, "_");
-  const path = `product-images/${Date.now()}-${safeName}`;
-  const storageRef = ref(storage, path);
-  await uploadBytes(storageRef, file);
-  return getDownloadURL(storageRef);
+  const apiKey = import.meta.env.VITE_IMGBB_API_KEY;
+  if (!apiKey) throw new Error("ImgBB API key not configured (VITE_IMGBB_API_KEY)");
+
+  const formData = new FormData();
+  formData.append("image", file);
+
+  const res = await fetch(`https://api.imgbb.com/1/upload?key=${apiKey}`, {
+    method: "POST",
+    body: formData,
+  });
+  const data = await res.json();
+  if (!res.ok || !data?.success) {
+    throw new Error(data?.error?.message || "Image upload failed");
+  }
+  return data.data.url;
 }
 
 export async function updateProduct(id, patch) {
